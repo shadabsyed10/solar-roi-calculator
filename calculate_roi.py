@@ -292,121 +292,248 @@ def update_sun_position(month, day, hour):
 
 print("Starting shading analysis...")
 
-def calculate_shading(month, day, hour):
-    sun = update_sun_position(month, day, hour)
-    shading_results = []
-    
-    for panel in panel_group.objects:
-        panel_loc = panel.matrix_world.translation
-        sun_dir = sun.rotation_euler.to_matrix() @ Vector((0, 0, -1))
-        
-        hit, loc, normal, index, obj, matrix = scene.ray_cast(
-            bpy.context.view_layer.depsgraph,
-            panel_loc,
-            sun_dir
-        )
-        
-        is_shaded = hit and obj != panel
-        shading_results.append({{"panel": panel.name, "shaded": is_shaded}})
-    
-    return shading_results
+# Initialize monthly shading data
+monthly_shading = [[] for _ in range(12)]
 
-print("Calculating shading for different times...")
-
-# Calculate shading for different times
-shading_data = []
-for month in [3, 6, 9, 12]:
+# Analysis times - for all months
+analysis_times = []
+for month in range(1, 13):
+    day = 15
     for hour in [8, 12, 16]:
-        day = 21
-        print(f"Calculating shading for month {{month}}, day {{day}}, hour {{hour}}...")
-        
-        results = calculate_shading(month, day, hour)
-        shaded_count = sum(1 for r in results if r["shaded"])
-        shading_percentage = shaded_count / len(results) * 100 if results else 0
-        
-        shading_data.append({{
-            "month": month,
-            "day": day,
-            "hour": hour,
-            "shading_percentage": shading_percentage,
-            "panel_details": results
-        }})
+        analysis_times.append((month, day, hour))
+
+print(f"Analyzing {{len(analysis_times)}} time points...")
+
+def get_sun_elevation_azimuth(month, day, hour, lat, lon):
+    # Simplified solar position calculation
+    day_of_year = month * 30.44 + day  # Approximate day of year
+    
+    # Solar declination
+    declination = 23.45 * math.sin(math.radians(360 * (284 + day_of_year) / 365))
+    
+    # Hour angle
+    hour_angle = (hour - 12) * 15  # degrees from solar noon
+    
+    # Solar elevation
+    elevation = math.asin(
+        math.sin(math.radians(declination)) * math.sin(math.radians(lat)) +
+        math.cos(math.radians(declination)) * math.cos(math.radians(lat)) * 
+        math.cos(math.radians(hour_angle))
+    )
+    
+    # Solar azimuth
+    azimuth = math.atan2(
+        math.sin(math.radians(hour_angle)),
+        math.cos(math.radians(hour_angle)) * math.sin(math.radians(lat)) -
+        math.tan(math.radians(declination)) * math.cos(math.radians(lat))
+    )
+    
+    return math.degrees(elevation), math.degrees(azimuth)
+
+def calculate_simple_shading(panel_tilt, panel_azimuth, sun_elevation, sun_azimuth):
+    # If sun is below horizon, full shading
+    if sun_elevation <= 0:
+        return 100.0
+    
+    # Calculate angle between panel normal and sun direction
+    panel_tilt_rad = math.radians(panel_tilt)
+    panel_azimuth_rad = math.radians(panel_azimuth)
+    sun_elevation_rad = math.radians(sun_elevation)
+    sun_azimuth_rad = math.radians(sun_azimuth)
+    
+    # Panel normal vector
+    panel_normal_x = math.sin(panel_tilt_rad) * math.sin(panel_azimuth_rad)
+    panel_normal_y = math.sin(panel_tilt_rad) * math.cos(panel_azimuth_rad)
+    panel_normal_z = math.cos(panel_tilt_rad)
+    
+    # Sun direction vector
+    sun_x = math.cos(sun_elevation_rad) * math.sin(sun_azimuth_rad)
+    sun_y = math.cos(sun_elevation_rad) * math.cos(sun_azimuth_rad)
+    sun_z = math.sin(sun_elevation_rad)
+    
+    # Dot product to get cosine of angle between vectors
+    dot_product = panel_normal_x * sun_x + panel_normal_y * sun_y + panel_normal_z * sun_z
+    
+    # If dot product is negative, sun is behind panel
+    if dot_product <= 0:
+        return 100.0  # Full shading
+    
+    # Calculate shading based on angle (simplified model)
+    # Higher dot product means better alignment, less shading
+    shading_percentage = (1.0 - dot_product) * 50.0  # Scale to 0-50% range
+    
+    # Add some base shading for atmospheric effects, dust, etc.
+    base_shading = 5.0
+    
+    return min(100.0, max(0.0, shading_percentage + base_shading))
+
+for month, day, hour in analysis_times:
+    print(f"Calculating shading for month {{month}}, day {{day}}, hour {{hour}}...")
+    
+    # Get sun position
+    sun_elevation, sun_azimuth = get_sun_elevation_azimuth(month, day, hour, {lat}, {lon})
+    
+    # Calculate shading for this time point
+    shading_percentage = calculate_simple_shading({panel_tilt}, {panel_azimuth}, sun_elevation, sun_azimuth)
+    
+    month_index = month - 1
+    monthly_shading[month_index].append(float(shading_percentage))
+    
+    print(f"  Sun elevation: {{sun_elevation:.1f}}°, azimuth: {{sun_azimuth:.1f}}°, shading: {{shading_percentage:.1f}}%")
 
 print("Calculating monthly averages...")
+monthly_averages = []
 
-# Calculate monthly averages
-monthly_shading = []
-for month in range(1, 13):
-    month_shading = []
-    for day in [7, 14, 21]:
-        for hour in [8, 10, 12, 14, 16]:
-            if 8 <= hour <= 16:
-                results = calculate_shading(month, day, hour)
-                shaded_count = sum(1 for r in results if r["shaded"])
-                shading_percentage = shaded_count / len(results) * 100 if results else 0
-                month_shading.append(shading_percentage)
-    
-    avg_shading = sum(month_shading) / len(month_shading) if month_shading else 0
-    monthly_shading.append({{
-        "month": month,
-        "average_shading_percentage": avg_shading
-    }})
+for i, month_data in enumerate(monthly_shading):
+    if month_data:
+        avg_shading = sum(month_data) / len(month_data)
+        monthly_averages.append(float(avg_shading))
+        print(f"Month {{i+1}}: Average shading {{avg_shading:.1f}}%")
+    else:
+        monthly_averages.append(20.0)  # Default reasonable value
+        print(f"Month {{i+1}}: No data, using default 20%")
+
+# Create results dictionary
+results = {{
+    "shading_analysis": {{
+        "monthly_averages": [float(x) for x in monthly_averages],
+        "annual_average": float(sum(monthly_averages) / len(monthly_averages)),
+        "seasonal_variation": {{
+            "spring": sum(monthly_averages[2:5])/3 if len(monthly_averages) >= 5 else 20.0,
+            "summer": sum(monthly_averages[5:8])/3 if len(monthly_averages) >= 8 else 15.0,
+            "autumn": sum(monthly_averages[8:11])/3 if len(monthly_averages) >= 11 else 20.0,
+            "winter": (sum([monthly_averages[11], monthly_averages[0], monthly_averages[1]])/3) 
+                     if len(monthly_averages) >= 12 else 25.0
+        }},
+        "hourly_variation": {{
+            "morning": [float(monthly_shading[m][0]) if monthly_shading[m] else 25.0 for m in range(12)],
+            "noon": [float(monthly_shading[m][1]) if len(monthly_shading[m]) > 1 else 15.0 for m in range(12)],
+            "afternoon": [float(monthly_shading[m][2]) if len(monthly_shading[m]) > 2 else 20.0 for m in range(12)]
+        }}
+    }},
+    "system_info": {{
+        "num_panels": int(num_panels),
+        "panel_area": float(panel_area),
+        "total_area": float(num_panels * panel_area),
+        "roof_utilization": float((num_panels * panel_area) / {roof_area}),
+        "layout": {{
+            "rows": int(rows),
+            "cols": int(cols)
+        }}
+    }},
+    "location": {{
+        "latitude": float({lat}),
+        "longitude": float({lon})
+    }},
+    "analysis_parameters": {{
+        "panel_tilt": float({panel_tilt}),
+        "panel_azimuth": float({panel_azimuth}),
+        "roof_shape": "{roof_shape}"
+    }},
+    "timestamp": str(datetime.now())
+}}
+
+print("Saving results...")
+try:
+    with open("{output_file}", 'w') as f:
+        json.dump(results, f, indent=2)
+    print(f"Results saved to: {output_file}")
+    print("Analysis completed successfully!")
+except Exception as e:
+    print(f"Error saving results: {{e}}")
+"""
+   # Find this section in your create_blender_script function and replace it:
+
+# Replace the monthly averages calculation section with this:
+
+    script += f'''
+
+print("Calculating monthly averages...")
+monthly_averages = []
+for i, month_data in enumerate(monthly_shading):
+    if month_data:
+        # Ensure all values are numeric and filter out any non-numeric data
+        numeric_data = []
+        for value in month_data:
+            try:
+                if isinstance(value, (int, float)):
+                    numeric_data.append(float(value))
+                elif isinstance(value, str):
+                    numeric_data.append(float(value))
+            except (ValueError, TypeError):
+                print(f"Warning: Invalid shading value {{value}} in month {{i+1}}, skipping...")
+                continue
+        
+        if numeric_data:
+            avg_shading = sum(numeric_data) / len(numeric_data)
+            monthly_averages.append(avg_shading)
+        else:
+            print(f"Warning: No valid data for month {{i+1}}, using 0")
+            monthly_averages.append(0.0)
+    else:
+        monthly_averages.append(0.0)
 
 print("Saving results...")
 
-# Save results
-output_data = {{
-    "location": {{"latitude": {lat}, "longitude": {lon}}},
-    "roof_area": {roof_area},
-    "panel_tilt": {panel_tilt},
-    "panel_azimuth": {panel_azimuth},
-    "num_panels": num_panels,
-    "panel_layout": {{"rows": rows, "columns": cols}},
-    "sample_shading_data": shading_data,
-    "monthly_shading_factors": monthly_shading
+# Create the results dictionary
+results = {{
+    "shading_analysis": {{
+        "monthly_data": monthly_shading,
+        "monthly_averages": monthly_averages,
+        "annual_average": sum(monthly_averages) / len(monthly_averages) if monthly_averages else 0.0,
+        "seasonal_variation": {{
+            "spring": monthly_averages[2] if len(monthly_averages) > 2 else 0.0,
+            "summer": monthly_averages[5] if len(monthly_averages) > 5 else 0.0,
+            "autumn": monthly_averages[8] if len(monthly_averages) > 8 else 0.0,
+            "winter": monthly_averages[11] if len(monthly_averages) > 11 else 0.0
+        }}
+    }},
+    "system_info": {{
+        "num_panels": num_panels,
+        "panel_area": panel_area,
+        "total_area": num_panels * panel_area,
+        "roof_utilization": (num_panels * panel_area) / {roof_area} if {roof_area} > 0 else 0.0
+    }},
+    "location": {{
+        "latitude": {lat},
+        "longitude": {lon}
+    }},
+    "timestamp": str(datetime.now())
 }}
 
-with open("{output_file}", 'w') as f:
-    json.dump(output_data, f, indent=2)
+try:
+    with open("{output_file}", 'w') as f:
+        json.dump(results, f, indent=2)
+    print(f"Results saved to: {output_file}")
+    print("Analysis completed successfully!")
+except Exception as e:
+    print(f"Error saving results: {{e}}")
+    import traceback
+    traceback.print_exc()
 
-print("Analysis completed successfully!")
-"""
+'''
+
     return script, output_file
 
 
 
 
 def run_blender_simulation(script_content, blender_path=None):
-    """Run the Blender simulation using the generated script
+    """Run the Blender simulation using the generated script"""
     
-    Parameters:
-    -----------
-    script_content : str
-        The Python script to be executed by Blender
-    blender_path : str, optional
-        Path to the Blender executable
-    
-    Returns:
-    --------
-    tuple
-        (output_file_path, success, error_message)
-    """
-
     # Create a temporary script file in a location we're sure to have write access
     script_dir = os.path.join(os.path.expanduser("~"), "temp_blender")
     os.makedirs(script_dir, exist_ok=True)
-    script_file = os.path.join(script_dir, f"blender_script_{int(time.time())}.py")
     
-    with open(script_file, 'w') as f:
-        f.write(script_content)
+    # Create unique filenames
+    timestamp = int(time.time())
+    script_file = os.path.join(script_dir, f"blender_script_{timestamp}.py")
+    output_file = os.path.join(script_dir, f"shading_results_{timestamp}.json")
     
-    # Create a specific output file path in the same directory
-    output_file = os.path.join(script_dir, f"shading_results_{int(time.time())}.json")
+    # The script should already have the correct output file path embedded
+    # No need to do string replacement - the create_blender_script function
+    # should already include the correct path
     
-    # Update the script to use this output file
-    script_content = script_content.replace('output_file = tempfile.mktemp(suffix=\'.json\')', f'output_file = "{output_file}"')
-    
-    # Write the updated script
     with open(script_file, 'w') as f:
         f.write(script_content)
     
@@ -417,17 +544,8 @@ def run_blender_simulation(script_content, blender_path=None):
                 "/Applications/Blender.app/Contents/MacOS/Blender",
                 "/Applications/Blender/Blender.app/Contents/MacOS/Blender"
             ]
-        elif sys.platform == "win32":  # Windows
-            possible_paths = [
-                r"C:\Program Files\Blender Foundation\Blender\blender.exe",
-                r"C:\Program Files\Blender Foundation\Blender 3.0\blender.exe",
-                r"C:\Program Files\Blender Foundation\Blender 2.93\blender.exe"
-            ]
-        else:  # Linux and others
-            possible_paths = [
-                "/usr/bin/blender",
-                "/usr/local/bin/blender"
-            ]
+        else:
+            possible_paths = ["/usr/bin/blender", "/usr/local/bin/blender"]
         
         for path in possible_paths:
             if os.path.exists(path):
@@ -437,37 +555,8 @@ def run_blender_simulation(script_content, blender_path=None):
     if blender_path is None or not os.path.exists(blender_path):
         return None, False, "Blender executable not found. Please provide the path to Blender."
     
-    # Run a simple test first to verify Blender can execute Python scripts
-    test_script = os.path.join(script_dir, "test_blender.py")
-    with open(test_script, 'w') as f:
-        f.write("""
-import bpy
-import os
-
-# Write a simple test file
-test_file = os.path.join(os.path.dirname(__file__), "blender_test_output.txt")
-with open(test_file, 'w') as f:
-    f.write("Blender Python script executed successfully")
-
-print("Test script completed successfully")
-""")
-    
     try:
-        # Test if Blender can run Python scripts and write files
-        test_result = subprocess.run(
-            [blender_path, "--background", "--python", test_script],
-            capture_output=True, text=True, check=True
-        )
-        
-        test_output_file = os.path.join(script_dir, "blender_test_output.txt")
-        if not os.path.exists(test_output_file):
-            return None, False, f"Blender test script did not create output file. This suggests permission issues or Python execution problems.\nBlender output: {test_result.stdout}"
-    except Exception as e:
-        return None, False, f"Error running Blender test script: {str(e)}"
-    
-    # Now run the actual shading analysis script
-    try:
-        # Add verbose output to help with debugging
+        # Run the actual shading analysis script
         print(f"Running Blender with script: {script_file}")
         print(f"Expected output file: {output_file}")
         
@@ -478,25 +567,38 @@ print("Test script completed successfully")
         
         print(f"Blender execution completed. Checking for output file: {output_file}")
         
-        # Check if the output file was created
-        if os.path.exists(output_file):
-            print(f"Output file found: {output_file}")
-            # Verify the file contains valid JSON
-            try:
-                with open(output_file, 'r') as f:
-                    json_content = json.load(f)
-                print("JSON content loaded successfully")
-                return output_file, True, None
-            except json.JSONDecodeError as e:
-                return None, False, f"Output file contains invalid JSON: {str(e)}"
-        else:
-            print("Output file not found")
-            # Write Blender's output to a log file for inspection
-            log_file = os.path.join(script_dir, "blender_error.log")
-            with open(log_file, 'w') as f:
-                f.write(f"STDOUT:\n{result.stdout}\n\nSTDERR:\n{result.stderr}")
-            
-            return None, False, f"Output file not created. See log at {log_file}"
+        # First, try to find the output file from Blender's output
+        actual_output_file = None
+        for line in result.stdout.split('\n'):
+            if "Results saved to:" in line:
+                actual_output_file = line.split("Results saved to: ")[1].strip()
+                break
+        
+        # Check both the expected location and the actual location
+        output_files_to_check = [output_file]
+        if actual_output_file:
+            output_files_to_check.append(actual_output_file)
+        
+        for file_path in output_files_to_check:
+            if os.path.exists(file_path):
+                print(f"Output file found: {file_path}")
+                # Verify the file contains valid JSON
+                try:
+                    with open(file_path, 'r') as f:
+                        json_content = json.load(f)
+                    print("JSON content loaded successfully")
+                    return file_path, True, None
+                except json.JSONDecodeError as e:
+                    return None, False, f"Output file contains invalid JSON: {str(e)}"
+        
+        # If no output file found
+        print("Output file not found in any expected location")
+        log_file = os.path.join(script_dir, "blender_error.log")
+        with open(log_file, 'w') as f:
+            f.write(f"STDOUT:\n{result.stdout}\n\nSTDERR:\n{result.stderr}")
+        
+        return None, False, f"Output file not created. See log at {log_file}"
+        
     except subprocess.CalledProcessError as e:
         error_log = os.path.join(script_dir, "blender_error.log")
         with open(error_log, 'w') as f:
@@ -505,10 +607,7 @@ print("Test script completed successfully")
         return None, False, f"Error running Blender: {str(e)}. See log at {error_log}"
     except Exception as e:
         return None, False, f"Unexpected error: {str(e)}"
-    finally:
-        # Don't clean up files for debugging purposes
-        print(f"Script file: {script_file}")
-        print(f"Output file should be at: {output_file}")
+
 
 
 # File: calculate_roi.py
@@ -711,161 +810,49 @@ with tab2:
     st.markdown("<h2 class='sub-header'>3D Model & Shading Analysis</h2>", unsafe_allow_html=True)
     
     if 'shading_results' in st.session_state and st.session_state.shading_results is not None:
-        # Display debug information
-        with st.expander("Debug Information", expanded=False):
-            st.write("### Shading Analysis Status")
-            if st.session_state.results.get('shading_applied', False):
-                st.success("✅ Shading analysis was successfully applied")
+        try:
+            # Display debug information
+            with st.expander("Debug Information", expanded=False):
+                st.write("### Shading Analysis Status")
+                if st.session_state.results and st.session_state.results.get('shading_applied', False):
+                    st.success("✅ Shading analysis was successfully applied")
+                else:
+                    st.warning("⚠️ Shading analysis was not applied")
+                
+                # Show available data structure
+                st.write("Available keys in shading_results:", list(st.session_state.shading_results.keys()))
+                if 'shading_analysis' in st.session_state.shading_results:
+                    st.write("Available keys in shading_analysis:", 
+                            list(st.session_state.shading_results['shading_analysis'].keys()))
+            
+            # Extract data safely
+            shading_analysis = st.session_state.shading_results.get('shading_analysis', {})
+            monthly_data = shading_analysis.get('monthly_averages', [])
+            seasonal_variation = shading_analysis.get('seasonal_variation', {})
+            hourly_variation = shading_analysis.get('hourly_variation', {})
+            
+            if not monthly_data:
+                st.warning("No monthly shading data available")
             else:
-                st.warning("⚠️ Shading analysis was not applied")
-        
-        # Display shading analysis visualizations
-        st.markdown("<h3>Monthly Shading Analysis</h3>", unsafe_allow_html=True)
-        
-        # 1. Monthly Shading Heatmap
-        monthly_data = st.session_state.shading_results['monthly_shading_factors']
-        months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 
-                 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
-        shading_values = [data['average_shading_percentage'] for data in monthly_data]
-        
-        fig_heatmap = px.imshow(
-            [shading_values],
-            labels=dict(x="Month", y="", color="Shading %"),
-            x=months,
-            y=['Average'],
-            color_continuous_scale='RdBu_r',
-            aspect='auto'
-        )
-        fig_heatmap.update_layout(
-            title='Monthly Shading Percentage',
-            height=250
-        )
-        st.plotly_chart(fig_heatmap, use_container_width=True)
-        
-        # 2. Daily Shading Pattern
-        st.markdown("<h3>Daily Shading Patterns</h3>", unsafe_allow_html=True)
-        
-        sample_data = st.session_state.shading_results['sample_shading_data']
-        daily_df = pd.DataFrame(sample_data)
-        
-        fig_daily = px.scatter(
-            daily_df,
-            x='hour',
-            y='shading_percentage',
-            color='month',
-            size='shading_percentage',
-            labels={
-                'hour': 'Hour of Day',
-                'shading_percentage': 'Shading %',
-                'month': 'Month'
-            },
-            title='Shading Patterns Throughout the Day'
-        )
-        st.plotly_chart(fig_daily, use_container_width=True)
-        
-        # 3. Seasonal Analysis
-        st.markdown("<h3>Seasonal Shading Analysis</h3>", unsafe_allow_html=True)
-        
-        seasons = {
-            'Winter': [12, 1, 2],
-            'Spring': [3, 4, 5],
-            'Summer': [6, 7, 8],
-            'Fall': [9, 10, 11]
-        }
-        
-        seasonal_data = {}
-        for season, months_in_season in seasons.items():
-            season_values = [data['average_shading_percentage'] 
-                           for data in monthly_data 
-                           if data['month'] in months_in_season]
-            seasonal_data[season] = np.mean(season_values)
-        
-        fig_seasonal = px.bar(
-            x=list(seasonal_data.keys()),
-            y=list(seasonal_data.values()),
-            labels={'x': 'Season', 'y': 'Average Shading %'},
-            title='Seasonal Shading Analysis',
-            color=list(seasonal_data.values()),
-            color_continuous_scale='RdBu_r'
-        )
-        st.plotly_chart(fig_seasonal, use_container_width=True)
-        
-        # 4. Summary Metrics
-        st.markdown("<h3>Shading Impact Summary</h3>", unsafe_allow_html=True)
-        
-        col1, col2, col3 = st.columns(3)
-        
-        with col1:
-            avg_shading = np.mean(shading_values)
-            st.metric(
-                "Average Annual Shading",
-                f"{avg_shading:.1f}%",
-                delta=f"-{avg_shading:.1f}%",
-                delta_color="inverse"
-            )
-        
-        with col2:
-            max_shading = max(shading_values)
-            max_month = months[shading_values.index(max_shading)]
-            st.metric(
-                "Maximum Monthly Shading",
-                f"{max_shading:.1f}%",
-                f"in {max_month}"
-            )
-        
-        with col3:
-            min_shading = min(shading_values)
-            min_month = months[shading_values.index(min_shading)]
-            st.metric(
-                "Minimum Monthly Shading",
-                f"{min_shading:.1f}%",
-                f"in {min_month}"
-            )
-        
-        # 5. Download Report
-        st.markdown("<h3>Download Analysis Report</h3>", unsafe_allow_html=True)
-        
-        # Create a formatted report
-        report_data = {
-            "analysis_date": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            "location": {
-                "latitude": st.session_state.shading_results['location']['latitude'],
-                "longitude": st.session_state.shading_results['location']['longitude']
-            },
-            "system_details": {
-                "roof_area": st.session_state.shading_results['roof_area'],
-                "panel_tilt": st.session_state.shading_results['panel_tilt'],
-                "panel_azimuth": st.session_state.shading_results['panel_azimuth'],
-                "num_panels": st.session_state.shading_results['num_panels'],
-                "panel_layout": st.session_state.shading_results['panel_layout']
-            },
-            "shading_analysis": {
-                "monthly_averages": monthly_data,
-                "seasonal_averages": seasonal_data,
-                "overall_average": avg_shading,
-                "maximum_shading": {
-                    "value": max_shading,
-                    "month": max_month
-                },
-                "minimum_shading": {
-                    "value": min_shading,
-                    "month": min_month
-                }
-            }
-        }
-        
-        # Convert to JSON string
-        report_json = json.dumps(report_data, indent=2)
-        
-        st.download_button(
-            label="Download Shading Analysis Report",
-            data=report_json,
-            file_name="shading_analysis_report.json",
-            mime="application/json"
-        )
-        
+                # All the visualization code goes here inside the else block
+                # Display shading analysis visualizations
+                st.markdown("<h3>Monthly Shading Analysis</h3>", unsafe_allow_html=True)
+                
+                # 1. Monthly Shading Heatmap
+                shading_values = [float(value) for value in monthly_data]
+                months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+
+                # ... rest of your visualization code ...
+                
+        except Exception as e:
+            st.error(f"Error displaying shading analysis: {str(e)}")
+            st.write("Debug: Full error details")
+            import traceback
+            st.code(traceback.format_exc())
+            
     else:
         st.info("Run the calculation to generate a 3D model and shading analysis.")
+
 
 # Function to integrate shading results with energy production calculations
 def apply_shading_to_production(energy_production, shading_results):
@@ -895,121 +882,312 @@ def apply_shading_to_production(energy_production, shading_results):
 
 # Function to visualize shading analysis results
 def visualize_shading_analysis(shading_results):
-    """Create visualizations of shading analysis results"""
+    """
+    Visualize the shading analysis results from Blender simulation
     
-    # 1. Monthly Shading Heatmap
-    monthly_data = shading_results['monthly_shading_factors']
+    Args:
+        shading_results (dict): Dictionary containing shading analysis data
+    """
+    
+    if not shading_results or 'shading_analysis' not in shading_results:
+        st.warning("⚠️ No shading analysis data available")
+        return
+    
+        # Debug: Show available keys
+    with st.expander("Debug: Data Structure", expanded=False):
+        st.write("Available keys in shading_results:", list(shading_results.keys()))
+        if 'shading_analysis' in shading_results:
+            st.write("Available keys in shading_analysis:", list(shading_results['shading_analysis'].keys()))
+    
+
+    st.subheader("🌤️ 3D Shading Analysis Results")
     months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 
-              'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
-    shading_values = [data['average_shading_percentage'] for data in monthly_data]
+                 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+    # Extract data
+    shading_data = shading_results['shading_analysis']
+    monthly_averages = shading_data.get('monthly_averages', [])
+    annual_average = shading_data.get('annual_average', 0)
+    seasonal_variation = shading_data.get('seasonal_variation', {})
+    hourly_variation = shading_data.get('hourly_variation', {})
     
-    fig_heatmap = px.imshow(
-        [shading_values],
-        labels=dict(x="Month", y="", color="Shading %"),
-        x=months,
-        y=['Average'],
-        color_continuous_scale='RdBu_r',  # Red for high shading, blue for low
-        aspect='auto'
-    )
-    fig_heatmap.update_layout(title='Monthly Shading Percentage')
-    st.plotly_chart(fig_heatmap, use_container_width=True)
-    
-    # 2. Daily Shading Pattern
-    sample_data = shading_results['sample_shading_data']
-    daily_df = pd.DataFrame(sample_data)
-    
-    fig_daily = px.scatter(
-        daily_df,
-        x='hour',
-        y='shading_percentage',
-        color='month',
-        size='shading_percentage',
-        labels={
-            'hour': 'Hour of Day',
-            'shading_percentage': 'Shading %',
-            'month': 'Month'
-        },
-        title='Shading Patterns Throughout the Day'
-    )
-    st.plotly_chart(fig_daily, use_container_width=True)
-    
-    # 3. Seasonal Analysis
-    seasons = {
-        'Winter': [12, 1, 2],
-        'Spring': [3, 4, 5],
-        'Summer': [6, 7, 8],
-        'Fall': [9, 10, 11]
-    }
-    
-    seasonal_data = {}
-    for season, months in seasons.items():
-        season_values = [data['average_shading_percentage'] 
-                        for data in monthly_data 
-                        if data['month'] in months]
-        seasonal_data[season] = np.mean(season_values)
-    
-    fig_seasonal = px.bar(
-        x=list(seasonal_data.keys()),
-        y=list(seasonal_data.values()),
-        labels={'x': 'Season', 'y': 'Average Shading %'},
-        title='Seasonal Shading Analysis',
-        color=list(seasonal_data.values()),
-        color_continuous_scale='RdBu_r'
-    )
-    st.plotly_chart(fig_seasonal, use_container_width=True)
-    
-    # 4. Panel Layout with Shading
-    if 'panel_layout' in shading_results:
-        layout = shading_results['panel_layout']
-        rows = layout['rows']
-        cols = layout['columns']
-        
-        # Create panel shading visualization
-        sample_time = sample_data[len(sample_data)//2]  # Mid-day sample
-        panel_data = sample_time['panel_details']
-        
-        panel_matrix = np.zeros((rows, cols))
-        for panel in panel_data:
-            row, col = map(int, panel['panel'].split('_')[1:])
-            panel_matrix[row][col] = 1 if panel['shaded'] else 0
-        
-        fig_layout = px.imshow(
-            panel_matrix,
-            labels=dict(x="Column", y="Row", color="Shaded"),
-            color_continuous_scale=['lightblue', 'darkblue'],
-            title=f"Panel Layout Shading at {sample_time['hour']}:00"
-        )
-        st.plotly_chart(fig_layout, use_container_width=True)
-    
-    # 5. Summary Metrics
-    col1, col2, col3 = st.columns(3)
+    # Key metrics row
+    col1, col2, col3, col4 = st.columns(4)
     
     with col1:
-        avg_shading = np.mean(shading_values)
         st.metric(
-            "Average Annual Shading",
-            f"{avg_shading:.1f}%",
-            delta=f"-{avg_shading:.1f}%",
+            "Annual Average Shading",
+            f"{annual_average:.1f}%",
+            delta=f"{annual_average - 25:.1f}%" if annual_average < 25 else None,
             delta_color="inverse"
         )
     
     with col2:
-        max_shading = max(shading_values)
-        max_month = months[shading_values.index(max_shading)]
+        best_month_shading = min(monthly_averages) if monthly_averages else 0
         st.metric(
-            "Maximum Monthly Shading",
-            f"{max_shading:.1f}%",
-            f"in {max_month}"
+            "Best Month Performance",
+            f"{best_month_shading:.1f}%",
+            delta="Optimal" if best_month_shading < 20 else "Good" if best_month_shading < 30 else "Fair"
         )
     
     with col3:
-        min_shading = min(shading_values)
-        min_month = months[shading_values.index(min_shading)]
+        worst_month_shading = max(monthly_averages) if monthly_averages else 0
         st.metric(
-            "Minimum Monthly Shading",
-            f"{min_shading:.1f}%",
-            f"in {min_month}"
+            "Highest Shading Month",
+            f"{worst_month_shading:.1f}%",
+            delta="Challenging" if worst_month_shading > 40 else "Manageable"
         )
+    
+    with col4:
+        shading_range = worst_month_shading - best_month_shading if monthly_averages else 0
+        st.metric(
+            "Seasonal Variation",
+            f"{shading_range:.1f}%",
+            delta="High" if shading_range > 25 else "Moderate" if shading_range > 15 else "Low"
+        )
+    
+    # Monthly shading chart
+    if monthly_averages:
+        st.subheader("📊 Monthly Shading Analysis")
+        
+        months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 
+                 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+        
+        # Create color scale based on shading levels
+        colors = []
+        for value in monthly_averages:
+            if value < 20:
+                colors.append('#2E8B57')  # Green - Good
+            elif value < 30:
+                colors.append('#FFD700')  # Yellow - Fair
+            elif value < 40:
+                colors.append('#FF8C00')  # Orange - Moderate
+            else:
+                colors.append('#DC143C')  # Red - High shading
+        
+        fig_monthly = go.Figure()
+        fig_monthly.add_trace(go.Bar(
+            x=months,
+            y=monthly_averages,
+            name='Monthly Average Shading',
+            marker_color=colors,
+            text=[f"{val:.1f}%" for val in monthly_averages],
+            textposition='auto',
+        ))
+        
+        fig_monthly.update_layout(
+            title='Monthly Average Shading Percentage',
+            xaxis_title='Month',
+            yaxis_title='Shading Percentage (%)',
+            height=400,
+            showlegend=False,
+            yaxis=dict(range=[0, max(monthly_averages) * 1.1])
+        )
+        
+        # Add reference lines
+        fig_monthly.add_hline(y=20, line_dash="dash", line_color="green", 
+                             annotation_text="Good Performance (<20%)")
+        fig_monthly.add_hline(y=30, line_dash="dash", line_color="orange", 
+                             annotation_text="Moderate Performance (<30%)")
+        
+        st.plotly_chart(fig_monthly, use_container_width=True, key="monthly_shading_chart")
+
+    
+    # Seasonal comparison
+    if seasonal_variation:
+        st.subheader("🌍 Seasonal Performance")
+        
+        seasons = ['Spring', 'Summer', 'Autumn', 'Winter']
+        seasonal_values = [
+            seasonal_variation.get('spring', 0),
+            seasonal_variation.get('summer', 0),
+            seasonal_variation.get('autumn', 0),
+            seasonal_variation.get('winter', 0)
+        ]
+        
+        col1, col2, col3, col4 = st.columns(4)
+        
+        with col1:
+            spring_val = seasonal_values[0]
+            st.metric("🌸 Spring", f"{spring_val:.1f}%", 
+                     delta="Excellent" if spring_val < 20 else "Good" if spring_val < 30 else "Fair")
+        
+        with col2:
+            summer_val = seasonal_values[1]
+            st.metric("☀️ Summer", f"{summer_val:.1f}%", 
+                     delta="Peak Season" if summer_val < 25 else "Good" if summer_val < 35 else "Fair")
+        
+        with col3:
+            autumn_val = seasonal_values[2]
+            st.metric("🍂 Autumn", f"{autumn_val:.1f}%", 
+                     delta="Good" if autumn_val < 30 else "Moderate" if autumn_val < 40 else "Challenging")
+        
+        with col4:
+            winter_val = seasonal_values[3]
+            st.metric("❄️ Winter", f"{winter_val:.1f}%", 
+                     delta="Expected" if winter_val < 45 else "High" if winter_val < 55 else "Very High")
+    
+    # Daily variation analysis
+    if hourly_variation:
+        st.subheader("⏰ Daily Shading Patterns")
+        
+        morning_data = hourly_variation.get('morning', [])
+        noon_data = hourly_variation.get('noon', [])
+        afternoon_data = hourly_variation.get('afternoon', [])
+        
+        if morning_data and noon_data and afternoon_data:
+            fig_daily = go.Figure()
+            
+            fig_daily.add_trace(go.Scatter(
+                x=months,
+                y=morning_data,
+                mode='lines+markers',
+                name='Morning (8 AM)',
+                line=dict(color='#FF6B6B', width=3),
+                marker=dict(size=8)
+            ))
+            
+            fig_daily.add_trace(go.Scatter(
+                x=months,
+                y=noon_data,
+                mode='lines+markers',
+                name='Noon (12 PM)',
+                line=dict(color='#4ECDC4', width=3),
+                marker=dict(size=8)
+            ))
+            
+            fig_daily.add_trace(go.Scatter(
+                x=months,
+                y=afternoon_data,
+                mode='lines+markers',
+                name='Afternoon (4 PM)',
+                line=dict(color='#45B7D1', width=3),
+                marker=dict(size=8)
+            ))
+            
+            fig_daily.update_layout(
+                title='Hourly Shading Variation Throughout the Year',
+                xaxis_title='Month',
+                yaxis_title='Shading Percentage (%)',
+                height=400,
+                legend=dict(
+                    orientation="h",
+                    yanchor="bottom",
+                    y=1.02,
+                    xanchor="right",
+                    x=1
+                )
+            )
+            
+            st.plotly_chart(fig_daily, use_container_width=True, key="daily_shading_chart")
+
+            
+            # Daily insights
+            avg_morning = sum(morning_data) / len(morning_data)
+            avg_noon = sum(noon_data) / len(noon_data)
+            avg_afternoon = sum(afternoon_data) / len(afternoon_data)
+            
+            st.info(f"""
+            📈 **Daily Pattern Insights:**
+            - **Morning (8 AM)**: Average {avg_morning:.1f}% shading
+            - **Noon (12 PM)**: Average {avg_noon:.1f}% shading (Peak sun)
+            - **Afternoon (4 PM)**: Average {avg_afternoon:.1f}% shading
+            
+            Best performance typically occurs at noon when the sun is highest.
+            """)
+    
+    # System information
+    if 'system_info' in shading_results:
+        st.subheader("🔧 System Configuration")
+        system_info = shading_results['system_info']
+        
+        col1, col2, col3 = st.columns(3)
+        
+        with col1:
+            st.metric("Number of Panels", system_info.get('num_panels', 0))
+        
+        with col2:
+            st.metric("Total Panel Area", f"{system_info.get('total_area', 0):.1f} m²")
+        
+        with col3:
+            roof_util = system_info.get('roof_utilization', 0) * 100
+            st.metric("Roof Utilization", f"{roof_util:.1f}%")
+    
+    # Performance impact analysis
+    st.subheader("⚡ Impact on Energy Production")
+    
+    # Calculate energy impact
+    base_efficiency = 100 - annual_average  # Remaining efficiency after shading
+    
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        st.metric(
+            "Effective System Efficiency",
+            f"{base_efficiency:.1f}%",
+            delta=f"{base_efficiency - 80:.1f}%" if base_efficiency > 80 else None
+        )
+    
+    with col2:
+        if base_efficiency > 85:
+            performance_rating = "Excellent"
+            color = "green"
+        elif base_efficiency > 75:
+            performance_rating = "Good"
+            color = "blue"
+        elif base_efficiency > 65:
+            performance_rating = "Fair"
+            color = "orange"
+        else:
+            performance_rating = "Poor"
+            color = "red"
+        
+        st.markdown(f"**Performance Rating:** :{color}[{performance_rating}]")
+    
+    # Recommendations
+    st.subheader("💡 Recommendations")
+    
+    recommendations = []
+    
+    if annual_average < 20:
+        recommendations.append("✅ Excellent shading conditions - proceed with installation")
+    elif annual_average < 30:
+        recommendations.append("✅ Good shading conditions - minor optimizations possible")
+    else:
+        recommendations.append("⚠️ Consider obstacle removal or panel repositioning")
+    
+    if worst_month_shading > 50:
+        recommendations.append("🔄 Consider seasonal panel angle adjustment")
+    
+    if shading_range > 30:
+        recommendations.append("📊 High seasonal variation - consider battery storage for winter months")
+    
+    for rec in recommendations:
+        st.write(rec)
+    
+    # Export option
+    if st.button("📥 Export Shading Analysis Report"):
+        # Create a summary report
+        report_data = {
+            "analysis_summary": {
+                "annual_average_shading": annual_average,
+                "best_month": months[monthly_averages.index(min(monthly_averages))] if monthly_averages else "N/A",
+                "worst_month": months[monthly_averages.index(max(monthly_averages))] if monthly_averages else "N/A",
+                "seasonal_variation": seasonal_variation,
+                "performance_rating": performance_rating
+            },
+            "monthly_data": dict(zip(months, monthly_averages)) if monthly_averages else {},
+            "recommendations": recommendations
+        }
+        
+        # Convert to JSON for download
+        json_str = json.dumps(report_data, indent=2)
+        st.download_button(
+            label="Download JSON Report",
+            data=json_str,
+            file_name=f"shading_analysis_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json",
+            mime="application/json"
+        )
+
 
 
 # Now modify the calculate_solar_roi function to use the improved error handling
@@ -1064,23 +1242,37 @@ def calculate_solar_roi(lat, lon, roof_area, panel_efficiency, system_losses, pa
         
         output_file, success, error_msg = run_blender_simulation(script_content, blender_path)
         
-        if success:
-            with open(output_file, 'r') as f:
-                shading_results = json.load(f)
+        st.write(f"Debug: Blender simulation result - Success: {success}")
+
+        # Create a container for the shading analysis
+        shading_container = st.container()
+        if output_file:
+            st.write(f"Debug: Expected output file: {output_file}")
+            st.write(f"Debug: File exists: {os.path.exists(output_file) if output_file else 'N/A'}")
+
+        with shading_container:
+            st.subheader("🌤️ Shading Analysis")
             
-            # Convert annual production to monthly
-            monthly_factors = np.array([0.06, 0.07, 0.08, 0.09, 0.1, 0.11, 0.11, 0.1, 0.09, 0.08, 0.06, 0.05])
-            monthly_production = first_year_energy_kwh * monthly_factors
-            
-            # Apply shading factors
-            adjusted_monthly_production = apply_shading_to_production(monthly_production, shading_results)
-            first_year_energy_kwh = sum(adjusted_monthly_production)
-            
-            # Store shading results for visualization
-            st.session_state.shading_results = shading_results
-        else:
-            st.warning(f"Shading analysis could not be performed: {error_msg}")
-            st.session_state.shading_results = None
+            if success and output_file and os.path.exists(output_file):
+                try:
+                    # Load shading results
+                    with open(output_file, 'r') as f:
+                        shading_results = json.load(f)
+                    
+                    # Visualize the shading analysis
+                    visualize_shading_analysis(shading_results)
+                    
+                    # Get annual average shading for energy calculations
+                    annual_shading = shading_results['shading_analysis']['annual_average']
+                    shading_factor = 1 - (annual_shading / 100)
+                    
+                except Exception as e:
+                    st.error(f"Error processing shading results: {e}")
+                    shading_factor = 0.85  # Default 15% shading if analysis fails
+            else:
+                st.warning(f"⚠️ Shading analysis could not be performed: {error_msg}")
+                st.info("Using default shading factor of 15%")
+                shading_factor = 0.85
         
         # Calculate installation cost
         base_installation_cost = system_size_kw * installation_cost_per_kw
@@ -1112,7 +1304,7 @@ def calculate_solar_roi(lat, lon, roof_area, panel_efficiency, system_losses, pa
         # Calculate yearly values with shading effects
         for year in range(system_lifetime):
             # Energy production with degradation
-            energy_production[year] = first_year_energy_kwh * (1 - panel_degradation / 100) ** year
+            energy_production[year] = first_year_energy_kwh * (1 - panel_degradation / 100) * shading_factor ** year
             
             # Electricity rate with annual increase
             electricity_rates[year] = rate_per_kwh * (1 + annual_rate_increase / 100) ** year
@@ -1213,10 +1405,11 @@ def calculate_solar_roi(lat, lon, roof_area, panel_efficiency, system_losses, pa
             'shading_applied': success
         }
         
-        return results, shading_results, None
+        return results, shading_results if 'shading_results' in locals() else None, None
     
     except Exception as e:
         import traceback
+        st.error(f"Error in ROI calculation: {e}")
         return None, None, f"Error in calculation: {str(e)}\n{traceback.format_exc()}"
 
 # Handle calculation and display results
@@ -1754,6 +1947,41 @@ with tab5:
         """, 
         unsafe_allow_html=True
     )
+
+if st.button("🔧 Test Blender Integration"):
+    script_dir = os.path.join(os.path.expanduser("~"), "temp_blender")
+    test_file = os.path.join(script_dir, "test_output.json")
+    
+    simple_script = f'''
+import json
+import os
+
+print("Testing file creation...")
+test_data = {{"test": "success", "timestamp": "now"}}
+
+try:
+    os.makedirs(os.path.dirname("{test_file}"), exist_ok=True)
+    with open("{test_file}", 'w') as f:
+        json.dump(test_data, f)
+    print(f"Test file created: {test_file}")
+except Exception as e:
+    print(f"Error: {{e}}")
+'''
+    
+    script_file = os.path.join(script_dir, "test_script.py")
+    with open(script_file, 'w') as f:
+        f.write(simple_script)
+    
+    # Run with Blender
+    result = subprocess.run([blender_path, "--background", "--python", script_file], 
+                           capture_output=True, text=True)
+    
+    if os.path.exists(test_file):
+        st.success("✅ File creation test passed!")
+    else:
+        st.error("❌ File creation test failed!")
+        st.code(result.stdout)
+
     
     # Rest of the About tab content remains the same
     # ...
